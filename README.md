@@ -18,18 +18,24 @@ The system works **fully offline** using Ollama for local LLM inference, or conn
 
 ## Features
 
+- **🎓 Multi-Agent Orchestration Architecture**:
+  - **Intent & Dialogue Agent (`IntentAgent`)**: Accurately differentiates casual conversational pleasantries ("how are you", "who are you") from academic research inquiries, replying with authentic natural intelligence without failing document search.
+  - **Query Expansion Agent (`QueryExpansionAgent`)**: Deconstructs queries into academic keywords, domain synonyms, and mathematical symbols to maximize hybrid search recall.
+  - **Passage Inspector Agent (`PassageInspectorAgent`)**: Audits retrieved chunks, checks mathematical integrity, filters low-confidence noise, and tracks page citations.
+  - **Professor-Grade Synthesis Agent (`AcademicSynthesisAgent`)**: Formulates rigorous responses with Executive Summaries, KaTeX LaTeX math (`$$...$$` standalone, `$..$` inline), structured breakdowns, and pedagogical examiner commentary.
 - **Multi-PDF ingestion** with PyMuPDF (fast C-based extraction)
 - **Sentence-aware chunking** that preserves semantic boundaries
 - **Page-level tracking** — every chunk knows which page(s) it comes from
 - **Hybrid retrieval** via Reciprocal Rank Fusion (FAISS dense + BM25 sparse)
 - **Near-duplicate filtering** to reduce redundant results
 - **Five LLM backends:**
-  - **Ollama** (local, fully offline) — recommended for private documents
-  - **Groq** (free cloud, Llama 3 inference)
+  - **Ollama** (local, fully offline — `llama3.2:1b` supported out-of-the-box)
+  - **Groq** (free cloud, `llama-3.3-70b-versatile`, `qwen/qwen3-32b`, `openai/gpt-oss-20b`)
   - **HuggingFace** (free cloud, Phi-3-mini)
   - **Together AI** (free cloud, Mixtral-8x7B)
-  - **Extractive fallback** (no network, no API key)
-- **Streaming responses** for Groq, Together AI, and Ollama
+  - **Extractive fallback** (no network, zero API key)
+- **KaTeX LaTeX Math Sanitizer** — guarantees clean rendering, zero raw bracket math artifacts
+- **Streaming responses** with live token rendering
 - **Confidence scoring** with visual quality indicators
 - **Source citations** with document name, page number, and relevance score
 - **Persistent vector store** — save/load indexes to disk
@@ -68,14 +74,17 @@ The system works **fully offline** using Ollama for local LLM inference, or conn
                                   │
                                   ▼
                       ┌─────────────────────────────┐
-                      │  LLM Answer Generation       │
-                      │  (Ollama / Groq / HF / etc.) │
+                      │  Multi-Agent Orchestrator   │
+                      │  • Intent & Dialogue Agent  │
+                      │  • Query Expansion Agent    │
+                      │  • Passage Inspector Agent  │
+                      │  • Academic Synthesis Agent │
                       └───────────┬─────────────────┘
                                   │
                                   ▼
                       ┌─────────────────────────────┐
                       │  Streamlit UI                │
-                      │  Answer + Page Citations     │
+                      │  Answer + LaTeX Math + Cards │
                       └─────────────────────────────┘
 ```
 
@@ -85,13 +94,14 @@ The system works **fully offline** using Ollama for local LLM inference, or conn
 
 ```
 RAG/
-├── app.py                    # Streamlit web application
+├── agent_orchestrator.py     # Multi-Agent intelligence pipeline (Intent, Expansion, Inspector, Synthesis)
+├── app.py                    # Streamlit web application with Aurora Glassmorphism UI
 ├── config.py                 # Centralised configuration & constants
 ├── document_processor.py     # PDF extraction (PyMuPDF) + sentence chunking
 ├── embedding_engine.py       # FAISS/BM25 indexing + DocumentStore + persistence
 ├── retrieval_engine.py       # Hybrid search with RRF + confidence scoring
 ├── llm_providers.py          # LLM backends (Ollama, Groq, HF, Together, extractive)
-├── utils.py                  # Export helpers + quality indicators
+├── utils.py                  # Math sanitization + export helpers + quality indicators
 ├── requirements.txt          # Python dependencies
 ├── .env.example              # Environment variable template
 ├── .gitignore

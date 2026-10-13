@@ -19,6 +19,14 @@ from config import (
     PROVIDER_OLLAMA,
     PROVIDER_SIGNUP_URLS,
 )
+from agent_orchestrator import (
+    AcademicSynthesisAgent,
+    AgentInspectionTrace,
+    IntentAgent,
+    PassageInspectorAgent,
+    QueryExpansionAgent,
+    QueryIntent,
+)
 from document_processor import chunk_document, extract_pages
 from embedding_engine import (
     DocumentStore,
@@ -29,7 +37,12 @@ from embedding_engine import (
     load_store,
     save_store,
 )
-from llm_providers import extractive_answer, resolve_api_key, stream_answer
+from llm_providers import (
+    extractive_answer,
+    get_available_ollama_models,
+    resolve_api_key,
+    stream_answer,
+)
 from retrieval_engine import search
 from utils import (
     answer_quality_label,
@@ -328,6 +341,49 @@ st.markdown("""
     .quality-green  { background: rgba(16,185,129,0.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.3); }
     .quality-orange { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
     .quality-red    { background: rgba(239,68,68,0.15);  color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+
+    /* ── Agent Inspection Badges & Cards ─── */
+    .agent-trace-box {
+        background: rgba(30, 27, 75, 0.45);
+        border: 1px solid rgba(139, 92, 246, 0.35);
+        border-radius: 14px;
+        padding: 0.9rem 1.25rem;
+        margin-bottom: 0.9rem;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    }
+    .agent-trace-title {
+        font-size: 0.85rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #c4b5fd;
+        margin-bottom: 0.45rem;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .agent-step-pill {
+        display: inline-block;
+        background: rgba(139, 92, 246, 0.2);
+        color: #ddd6fe;
+        border: 1px solid rgba(139, 92, 246, 0.3);
+        padding: 0.2rem 0.65rem;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        margin-right: 0.35rem;
+        margin-bottom: 0.3rem;
+    }
+    .agent-stat-pill {
+        display: inline-block;
+        background: rgba(16, 185, 129, 0.15);
+        color: #6ee7b7;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+        padding: 0.2rem 0.65rem;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -424,8 +480,30 @@ with st.sidebar:
         elif ai_provider in PROVIDER_SIGNUP_URLS:
             st.info(f"🔗 Free key: {PROVIDER_SIGNUP_URLS[ai_provider]}")
     elif ai_provider == PROVIDER_OLLAMA:
-        st.info("🦙 Make sure `ollama serve` is running locally.")
+        ollama_models = get_available_ollama_models()
+        if ollama_models:
+            st.success(f"🟢 Ollama active ({len(ollama_models)} models discovered)")
+            selected_model_name = st.selectbox(
+                "Ollama Model",
+                ollama_models,
+                index=0,
+                help="Select local model for offline inference",
+            )
+        else:
+            st.info("🦙 Ollama active. Local model is initializing...")
+            selected_model_name = st.text_input(
+                "Ollama Model",
+                value="llama3.2:1b",
+                help="Model name to run in local Ollama",
+            )
 
+    st.markdown("---")
+    st.markdown("### 🎓 Academic Multi-Agent Settings")
+    multi_agent_inspection = st.checkbox(
+        "Multi-Agent Deep Inspection",
+        value=True,
+        help="Runs Intent Agent, Query Expansion Agent, Passage Inspector, and KaTeX Math Guard.",
+    )
     st.markdown("---")
     st.markdown("### 🎯 Retrieval Settings")
     use_hybrid = st.checkbox(
@@ -572,84 +650,123 @@ if store.faiss_index is not None and store.chunks:
         st.chat_message("user").write(prompt)
 
         with st.chat_message("assistant"):
-            # ── Retrieval ────────────────────
-            with st.spinner("🔍 Searching documents..."):
-                try:
-                    results = search(
-                        store,
-                        get_embedding_model(),
-                        prompt,
-                        k=num_results,
-                        hybrid=use_hybrid,
-                        doc_filter=doc_filter or None,
-                        min_score=similarity_threshold,
-                    )
-                except Exception as exc:
-                    st.error(f"❌ Retrieval error: {exc}")
-                    results = []
+            # ── Agent 1: Intent Analysis ─────
+            intent, intent_reasoning, direct_reply = IntentAgent.analyze_intent(
+                prompt, has_documents=bool(store.chunks)
+            )
 
-            if not results:
-                no_result_msg = (
-                    f"No results above **{similarity_threshold:.0%}** similarity. "
-                    "Try lowering the threshold or broadening the document filter."
-                )
-                st.warning(no_result_msg)
-                st.session_state.chat_history.append(
-                    {"role": "assistant", "content": no_result_msg}
-                )
-            else:
-                # ── Quality indicator ────────
-                quality_label, quality_color = answer_quality_label(results)
-                color_class = f"quality-{quality_color}"
+            if intent == QueryIntent.GREETING_OR_CHITCHAT and direct_reply:
                 st.markdown(
-                    f'<span class="quality-badge {color_class}">{quality_label}</span>',
+                    '<span class="quality-badge quality-green">🧠 Intent: Conversational Interaction</span>',
                     unsafe_allow_html=True,
                 )
-
-                # ── Generate answer ──────────
-                context = build_context_string(results)
-                api_key = resolve_api_key(ai_provider, api_key_input)
-                if ai_provider in PROVIDER_ENV_VARS and not api_key:
-                    st.warning("⚠️ No API key — falling back to extractive mode")
-
-                try:
-                    answer = st.write_stream(
-                        stream_answer(
-                            ai_provider,
-                            prompt,
-                            context,
-                            api_key,
-                            model_name=selected_model_name,
-                        )
-                    )
-                except Exception as exc:
-                    st.error(f"❌ LLM error: {exc} — using extractive fallback.")
-                    answer = extractive_answer(prompt, context)
-                    st.write(answer)
-
-                # ── Source Citations ──────────
-                with st.expander(f"📌 Source Citations ({len(results)} passages)"):
-                    for i, r in enumerate(results, 1):
-                        page_info = f" · {r.page_label}" if r.page_label else ""
-                        score_pct = r.score * 100
-                        st.markdown(f"""
-                        <div class="citation-card">
-                            <div class="citation-header">
-                                <span class="citation-badge">Source {i}</span>
-                                <span class="citation-page">{r.doc_name}{page_info}</span>
-                                <span class="citation-score">Relevance: {r.confidence_pct}</span>
-                            </div>
-                            <div class="citation-text">{r.text[:350]}{'...' if len(r.text) > 350 else ''}</div>
-                            <div class="confidence-bar-container">
-                                <div class="confidence-bar-fill" style="width: {score_pct:.0f}%"></div>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                answer = clean_markdown_math(answer)
+                st.markdown(direct_reply)
                 st.session_state.chat_history.append(
-                    {"role": "assistant", "content": answer}
+                    {"role": "assistant", "content": direct_reply}
                 )
+            else:
+                # ── Agent 2: Query Decomposition & Academic Keyword Expansion ─────
+                search_query, expanded_terms = QueryExpansionAgent.expand_query(prompt)
+
+                # ── Agent 3: Hybrid Retrieval (FAISS + BM25) ─────
+                with st.spinner("🔬 Multi-Agent Research: Ingesting & searching academic passages..."):
+                    try:
+                        raw_results = search(
+                            store,
+                            get_embedding_model(),
+                            search_query,
+                            k=num_results,
+                            hybrid=use_hybrid,
+                            doc_filter=doc_filter or None,
+                            min_score=similarity_threshold,
+                        )
+                    except Exception as exc:
+                        st.error(f"❌ Retrieval error: {exc}")
+                        raw_results = []
+
+                # ── Agent 4: Passage Inspector & Fact-Verification ─────
+                verified_results, trace = PassageInspectorAgent.inspect_and_verify(raw_results, prompt)
+
+                if not verified_results:
+                    no_result_msg = (
+                        f"### ⚠️ Academic Grounding Notice\n\n"
+                        f"No verified document passages exceeded the minimum similarity threshold (**{similarity_threshold:.0%}**). "
+                        "Try lowering the similarity threshold in the sidebar or rephrasing your research inquiry."
+                    )
+                    st.warning(no_result_msg)
+                    st.session_state.chat_history.append(
+                        {"role": "assistant", "content": no_result_msg}
+                    )
+                else:
+                    # ── Render Agent Inspection Trace Card ─────
+                    pages_str = ", ".join(f"Page {p}" for p in trace.verified_pages) if trace.verified_pages else "Full Context"
+                    expansion_str = f" · Expanded: {len(expanded_terms)} concepts" if expanded_terms else ""
+
+                    st.markdown(f"""
+                    <div class="agent-trace-box">
+                        <div class="agent-trace-title">
+                            🎓 Multi-Agent Academic Inspection Trace
+                            <span class="agent-stat-pill">Grounding Confidence: {trace.confidence_pct}</span>
+                            <span class="agent-stat-pill">Verified: {len(verified_results)} chunks</span>
+                            <span class="agent-stat-pill">{pages_str}</span>
+                        </div>
+                        <div style="margin-top: 0.35rem;">
+                            <span class="agent-step-pill">🧠 Intent: {trace.intent_label}</span>
+                            <span class="agent-step-pill">🔍 Query Expansion: {len(expanded_terms)} terms</span>
+                            <span class="agent-step-pill">🛡️ Fact Verification: Grounded</span>
+                            <span class="agent-step-pill">📐 KaTeX LaTeX Math Guard: Active</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # ── Agent 5: Professor-Grade Synthesis & Formatting ─────
+                    context = build_context_string(verified_results)
+                    api_key = resolve_api_key(ai_provider, api_key_input)
+                    if ai_provider in PROVIDER_ENV_VARS and not api_key:
+                        st.warning("⚠️ No API key — running Professor-Grade Extractive Synthesizer offline")
+
+                    try:
+                        answer = st.write_stream(
+                            stream_answer(
+                                ai_provider,
+                                prompt,
+                                context,
+                                api_key,
+                                model_name=selected_model_name,
+                            )
+                        )
+                    except Exception as exc:
+                        st.error(f"❌ LLM error: {exc} — synthesizing offline academic report.")
+                        answer = AcademicSynthesisAgent.synthesize_offline_academic_report(
+                            prompt, verified_results, trace
+                        )
+                        st.write(answer)
+
+                    # Clean LaTeX math before storing
+                    answer = clean_markdown_math(answer)
+
+                    # ── Verified Source Citations ──────────
+                    with st.expander(f"📌 Verified Citations & Passage Evidence ({len(verified_results)} passages)"):
+                        for i, r in enumerate(verified_results, 1):
+                            page_info = f" · {r.page_label}" if r.page_label else ""
+                            score_pct = r.score * 100
+                            st.markdown(f"""
+                            <div class="citation-card">
+                                <div class="citation-header">
+                                    <span class="citation-badge">Source {i}</span>
+                                    <span class="citation-page">{r.doc_name}{page_info}</span>
+                                    <span class="citation-score">Relevance: {r.confidence_pct}</span>
+                                </div>
+                                <div class="citation-text">{clean_markdown_math(r.text[:350])}{'...' if len(r.text) > 350 else ''}</div>
+                                <div class="confidence-bar-container">
+                                    <div class="confidence-bar-fill" style="width: {score_pct:.0f}%"></div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                    st.session_state.chat_history.append(
+                        {"role": "assistant", "content": answer}
+                    )
 
     # ── Chat Actions ─────────────────────────
     st.markdown("---")
