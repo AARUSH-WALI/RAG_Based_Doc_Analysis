@@ -373,11 +373,15 @@ Professor's Formal Response:"""
         
         # Identify key points
         key_points = []
+        seen_pts = set()
         for c in primary_chunks:
             lines = [l.strip() for l in c.split("\n") if l.strip()]
             for line in lines:
-                if len(line) > 25 and not line.startswith("#"):
-                    key_points.append(line)
+                clean_l = re.sub(r"^[•\-\*]\s*", "", line).strip()
+                clean_l = re.sub(r"^\[Source\s+\d+[^\]]*\]\s*", "", clean_l).strip()
+                if len(clean_l) > 25 and not clean_l.startswith("#") and not clean_l.startswith("[Source") and clean_l not in seen_pts:
+                    seen_pts.add(clean_l)
+                    key_points.append(clean_l)
 
         bullets_str = "\n".join(f"- {p}" for p in key_points[:6])
         page_summary = ", ".join(f"Page {p}" for p in trace.verified_pages) if trace.verified_pages else "Relevant Sections"

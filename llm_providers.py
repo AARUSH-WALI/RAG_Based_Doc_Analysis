@@ -250,33 +250,57 @@ def _stream_ollama(
 def extractive_answer(question: str, context: str) -> str:
     """
     Academic-grade extractive synthesizer. Extracts key definitions,
-    theorems, and formulas from the context and structures them into a
+    technical claims, and achievements from the context and structures them into a
     professor-grade report. Works 100% offline with zero external APIs.
     """
-    sentences = [s.strip() for s in context.replace("\n", " ").split(".") if len(s.strip()) > 15]
+    # 1. Clean context: strip [Source ...] metadata lines first
+    clean_lines = []
+    for line in context.split("\n"):
+        line_s = line.strip()
+        if not line_s or line_s.startswith("[Source ") or "Relevance:" in line_s:
+            continue
+        clean_lines.append(line_s)
+    clean_body = " ".join(clean_lines)
+
+    # 2. Split into clean distinct statements
+    raw_sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", clean_body) if len(s.strip()) > 20]
+    
+    sentences: list[str] = []
+    seen: set[str] = set()
+    for s in raw_sentences:
+        s_clean = re.sub(r"^\[Source\s+\d+[^\]]*\]\s*", "", s).strip()
+        s_clean = re.sub(r"^[•\-\*]\s*", "", s_clean).strip()
+        if len(s_clean) > 20 and not s_clean.startswith("[Source") and s_clean not in seen:
+            seen.add(s_clean)
+            sentences.append(s_clean)
+
     keywords = [w.lower() for w in re.sub(r"[^\w\s]", "", question).split() if len(w) > 2]
 
-    if not sentences or not keywords:
+    if not sentences:
         return (
             "### 🎓 Academic Grounding Summary\n\n"
             "Related document passages were identified, but direct keyword correlation was inconclusive. "
             "Please review the verified source citations below for full technical details."
         )
 
-    # Score by keyword density + academic formula/term indicators
+    # Score by keyword density + academic/technical signal
     scored: list[tuple[float, str]] = []
-    academic_boosters = ["formula", "area", "sector", "segment", "circle", "radius", "theorem", "marks", "perimeter", "arc", "subtends", "pi", "degree", "chapter", "snapshot"]
+    academic_boosters = [
+        "engineer", "architect", "model", "pipeline", "system", "deployed",
+        "experience", "skills", "research", "patent", "publication", "framework",
+        "backend", "frontend", "cloud", "formula", "area", "theorem", "analysis"
+    ]
     
     for i, sentence in enumerate(sentences):
         lower = sentence.lower()
-        keyword_hits = sum(1 for kw in keywords if kw in lower)
-        boost = sum(0.5 for b in academic_boosters if b in lower)
+        keyword_hits = sum(1.5 for kw in keywords if kw in lower)
+        boost = sum(0.4 for b in academic_boosters if b in lower)
         position_bonus = 0.2 * max(0, 1 - i / len(sentences))
         total_score = keyword_hits + boost + position_bonus
         scored.append((total_score, sentence))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    top_findings = [s.strip() for score, s in scored[:6] if score > 0]
+    top_findings = [s.strip() for score, s in scored[:5] if score > 0]
 
     if not top_findings:
         return (
