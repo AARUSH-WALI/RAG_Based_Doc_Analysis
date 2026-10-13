@@ -74,18 +74,43 @@ def clean_markdown_math(text: str) -> str:
     """
     Clean raw math notations into standard KaTeX markdown syntax:
     - Converts [ \\boxed{...} ] or [ ... ] math blocks into $$ ... $$
+    - Converts unicode fractions (½, ¼, ⅓, ⅙) and superscripts (r², R², d²) into LaTeX
+    - Converts Greek symbols (π, θ) and operators (×, ·, −) into standard math syntax
     - Fixes leftover unicode/mojibake artifacts
     """
     import re
     # Convert [ \boxed{...} ] or [ ... ] with LaTeX formulas into $$ ... $$
     text = re.sub(r'\[\s*\\boxed\{([^}]+)\}\s*\]', r'$$\1$$', text)
     text = re.sub(r'\[\s*(\\frac|\\pi|\w+\s*=)[^\]]*\]', lambda m: f"$${m.group(0)[1:-1].strip()}$$", text)
+    
+    # Common math symbols to LaTeX KaTeX equivalents
+    math_symbols = {
+        "π": r"\pi",
+        "θ": r"\theta",
+        "r²": r"r^2",
+        "R²": r"R^2",
+        "d²": r"d^2",
+        "k²": r"k^2",
+        "½": r"\frac{1}{2}",
+        "¼": r"\frac{1}{4}",
+        "⅓": r"\frac{1}{3}",
+        "⅙": r"\frac{1}{6}",
+        "√3": r"\sqrt{3}",
+        "Δ OAB": r"\Delta OAB",
+        "Δ": r"\Delta",
+        "−": "-",
+        "·": r"\cdot ",
+    }
+    for sym, latex in math_symbols.items():
+        if sym in text:
+            text = text.replace(sym, latex)
+
     # Fix mojibake
     mojibake = {
         "â€”": "—", "â€“": "–", "â€™": "'", "â€˜": "'",
         "â€œ": '"', "â€ ": '"', "â€¢": "•", "â†’": "→",
         "â‡’": "⇒", "â‰ˆ": "≈", "â‰ ": "≠", "âˆ˜": "°",
-        "Â": "", "â": "", "": "",
+        "Â": "", "â": "",
     }
     for bad, good in mojibake.items():
         if bad in text:

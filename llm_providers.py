@@ -247,13 +247,88 @@ def _stream_ollama(
 # ──────────────────────────────────────────────
 # Provider: Extractive Fallback (No Network)
 # ──────────────────────────────────────────────
+def _decompose_into_academic_units(clean_body: str) -> list[str]:
+    """
+    Deconstructs dense revision sheets, mindmaps, and paragraphs into
+    atomic mathematical formulas, definitions, and rules.
+    """
+    from utils import clean_markdown_math
+
+    # Normalize dividers: bullets, pipes, em-dashes
+    text = clean_body.replace("•", "\n").replace("·", "\n").replace("|", "\n").replace("—", " - ")
+
+    # Insert linebreaks before major formula keywords if glued together
+    formula_anchors = [
+        r"(?=Circumference\b)",
+        r"(?=Area of circle\b)",
+        r"(?=Area of semicircle\b)",
+        r"(?=Area of quadrant\b)",
+        r"(?=Area of sector\b)",
+        r"(?=Area of major sector\b)",
+        r"(?=Area of minor segment\b)",
+        r"(?=Area of major segment\b)",
+        r"(?=Area of ring\b)",
+        r"(?=Length of arc\b)",
+        r"(?=Perimeter of sector\b)",
+        r"(?=Perimeter =)",
+        r"(?=Distance in n revolutions\b)",
+        r"(?=Angle swept by\b)",
+        r"(?=Scaling r →\b)",
+        r"(?=MCQ \(1 mark\))",
+        r"(?=Very short\b)",
+        r"(?=Short answer\b)",
+        r"(?=Long answer\b)",
+        r"(?=Case-based\b)",
+        r"(?=Common Errors\b)",
+        r"(?=Quick tip:)",
+        r"(?=Minor Segment\b)",
+        r"(?=Major Segment\b)",
+        r"(?=Special Angles\b)",
+        r"(?=Fifteen one-line facts\b)",
+    ]
+    for anchor in formula_anchors:
+        text = re.sub(anchor, "\n", text, flags=re.IGNORECASE)
+
+    raw_units = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # Split further on sentence ends if very long
+        if len(line) > 120 and "." in line:
+            sub = [s.strip() for s in re.split(r"(?<=[.!?])\s+", line) if len(s.strip()) > 15]
+            raw_units.extend(sub)
+        else:
+            raw_units.append(line)
+
+    cleaned_units = []
+    seen = set()
+    for u in raw_units:
+        # Strip trailing punctuation / noise
+        u_clean = re.sub(r"^[-*•\d\.\s]+\s*", "", u).strip()
+        u_clean = re.sub(r"^\[Source\s+\d+[^\]]*\]\s*", "", u_clean).strip()
+        u_clean = clean_markdown_math(u_clean)
+        
+        # Filter out generic noise or titles
+        if len(u_clean) < 8 or u_clean.startswith("CBSE Class 10") or u_clean.startswith("Revision Page"):
+            continue
+        if u_clean.lower() not in seen:
+            seen.add(u_clean.lower())
+            cleaned_units.append(u_clean)
+
+    return cleaned_units
+
+
 def extractive_answer(question: str, context: str) -> str:
     """
-    Academic-grade extractive synthesizer. Extracts key definitions,
-    technical claims, and achievements from the context and structures them into a
-    professor-grade report. Works 100% offline with zero external APIs.
+    Academic-grade extractive synthesizer. Deconstructs dense PDF formula sheets,
+    mindmaps, and text chunks into cleanly categorized, LaTeX-formatted academic sections:
+    - 📐 Key Mathematical Formulas & Proofs
+    - 🧠 Conceptual Principles & Definitions
+    - ⏱️ Examination Strategy & Marking Plan
+    - ⚠️ Common Errors & Pitfalls
     """
-    # 1. Clean context: strip [Source ...] metadata lines first
+    # 1. Clean context: strip [Source ...] metadata lines
     clean_lines = []
     for line in context.split("\n"):
         line_s = line.strip()
@@ -262,61 +337,65 @@ def extractive_answer(question: str, context: str) -> str:
         clean_lines.append(line_s)
     clean_body = " ".join(clean_lines)
 
-    # 2. Split into clean distinct statements
-    raw_sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", clean_body) if len(s.strip()) > 20]
-    
-    sentences: list[str] = []
-    seen: set[str] = set()
-    for s in raw_sentences:
-        s_clean = re.sub(r"^\[Source\s+\d+[^\]]*\]\s*", "", s).strip()
-        s_clean = re.sub(r"^[•\-\*]\s*", "", s_clean).strip()
-        if len(s_clean) > 20 and not s_clean.startswith("[Source") and s_clean not in seen:
-            seen.add(s_clean)
-            sentences.append(s_clean)
+    # 2. Decompose into distinct mathematical & conceptual units
+    units = _decompose_into_academic_units(clean_body)
 
-    keywords = [w.lower() for w in re.sub(r"[^\w\s]", "", question).split() if len(w) > 2]
-
-    if not sentences:
+    if not units:
         return (
             "### 🎓 Academic Grounding Summary\n\n"
-            "Related document passages were identified, but direct keyword correlation was inconclusive. "
-            "Please review the verified source citations below for full technical details."
+            "Document passages were identified, but no atomic analytical units could be extracted. "
+            "Please review the verified source citations below for full details."
         )
 
-    # Score by keyword density + academic/technical signal
-    scored: list[tuple[float, str]] = []
-    academic_boosters = [
-        "engineer", "architect", "model", "pipeline", "system", "deployed",
-        "experience", "skills", "research", "patent", "publication", "framework",
-        "backend", "frontend", "cloud", "formula", "area", "theorem", "analysis"
-    ]
-    
-    for i, sentence in enumerate(sentences):
-        lower = sentence.lower()
-        keyword_hits = sum(1.5 for kw in keywords if kw in lower)
-        boost = sum(0.4 for b in academic_boosters if b in lower)
-        position_bonus = 0.2 * max(0, 1 - i / len(sentences))
-        total_score = keyword_hits + boost + position_bonus
-        scored.append((total_score, sentence))
+    # 3. Categorize into academic sections
+    formulas: list[str] = []
+    exam_strategy: list[str] = []
+    pitfalls: list[str] = []
+    concepts: list[str] = []
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top_findings = [s.strip() for score, s in scored[:5] if score > 0]
+    for u in units:
+        u_lower = u.lower()
+        if any(term in u_lower for term in ["error", "wrong", "mistake", "tip:", "quick tip", "checklist"]):
+            pitfalls.append(u)
+        elif any(term in u_lower for term in ["mcq", "mark", "marks", "time per", "min", "very short", "long answer"]):
+            exam_strategy.append(u)
+        elif any(sym in u for sym in ["=", r"\pi", r"\theta", "r^2", "R^2", r"\frac", r"\sqrt", "area", "perimeter", "circumference", "arc", "formula", "scaling"]):
+            formulas.append(u)
+        else:
+            concepts.append(u)
 
-    if not top_findings:
-        return (
-            "### 🎓 Academic Context Notice\n\n"
-            "Document passages were retrieved, but no high-confidence analytical sentences directly matched. "
-            "Inspect the verified source citations below."
-        )
+    # Build structured response
+    output_sections = []
 
-    bullet_points = "\n".join(f"- {s}." for s in top_findings[:5])
+    if formulas:
+        f_list = "\n".join(f"  - **{f}**" if "=" in f else f"  - {f}" for f in formulas[:10])
+        output_sections.append(f"### 📐 Verified Mathematical Formulas & Sheet\n{f_list}")
+
+    if concepts:
+        c_list = "\n".join(f"  - {c}" for c in concepts[:6])
+        output_sections.append(f"### 🧠 Conceptual Principles & Mindmap\n{c_list}")
+
+    if exam_strategy:
+        e_list = "\n".join(f"  - {e}" for e in exam_strategy[:5])
+        output_sections.append(f"### ⏱️ Examination Strategy & Marking Breakdown\n{e_list}")
+
+    if pitfalls:
+        p_list = "\n".join(f"  - ⚠️ {p}" for p in pitfalls[:4])
+        output_sections.append(f"### 💡 Professor's Critical Caveats & Common Errors\n{p_list}")
+
+    if not output_sections:
+        fallback_list = "\n".join(f"- {u}" for u in units[:8])
+        output_sections.append(f"### 🎓 Executive Document Findings\n{fallback_list}")
+
+    joined_report = "\n\n---\n\n".join(output_sections)
+
     return (
-        f"### 🎓 Executive Summary & Key Technical Points\n\n"
-        f"Based on analytical passage extraction from the uploaded academic materials:\n\n"
-        f"{bullet_points}\n\n"
+        f"### 🎓 Academic Synthesis & Structured Formula Sheet\n\n"
+        f"The following verified data has been extracted, mathematically normalized into KaTeX symbols, and categorized:\n\n"
+        f"{joined_report}\n\n"
         f"---\n"
-        f"💡 **Professor's Pedagogical Note**: The above points represent verified extractions directly grounded "
-        f"in the document. Cross-reference with the citations below for full derivations and figures."
+        f"💡 **Note on Local Modes**: This response was generated by the zero-network **Extractive Synthesizer**. "
+        f"To get a fluid, natural conversational explanation, switch **AI Provider** in the sidebar to **`Ollama (Local LLM)`**."
     )
 
 

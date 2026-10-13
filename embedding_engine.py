@@ -70,8 +70,15 @@ class DocumentStore:
 # Embedding Model (cached at module level)
 # ──────────────────────────────────────────────
 def load_embedding_model() -> SentenceTransformer:
-    """Load the sentence-transformer model (downloads on first run)."""
-    return SentenceTransformer(EMBEDDING_MODEL_NAME)
+    """
+    Load the sentence-transformer model.
+    Prioritises the local offline cache first to guarantee zero-network
+    operation when Wi-Fi is disconnected.
+    """
+    try:
+        return SentenceTransformer(EMBEDDING_MODEL_NAME, local_files_only=True)
+    except Exception:
+        return SentenceTransformer(EMBEDDING_MODEL_NAME)
 
 
 # ──────────────────────────────────────────────
