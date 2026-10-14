@@ -195,6 +195,14 @@ class QueryExpansionAgent:
         "clock": ["minute hand", "hour hand", "rotation angle", "sweep"],
         "sprinkler": ["water spray", "circular region", "spray angle"],
         "marks": ["marking scheme", "exam question", "typical question form", "weightage"],
+        "expensive": ["highest price", "maximum cost", "costliest", "total price", "price per piece", "rate"],
+        "costly": ["highest price", "most expensive", "maximum cost", "total price"],
+        "cheapest": ["lowest price", "minimum cost", "least expensive", "lowest rate", "price per piece"],
+        "highest": ["maximum", "top", "greatest", "peak", "highest price", "highest value"],
+        "lowest": ["minimum", "bottom", "least", "lowest price", "lowest value"],
+        "price": ["cost", "rate", "total price", "price per piece", "amount"],
+        "cost": ["price", "total price", "rate", "amount"],
+        "quantity": ["units", "count", "pieces", "volume"],
     }
 
     @classmethod

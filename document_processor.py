@@ -63,17 +63,35 @@ class DocumentMeta:
 def extract_pages(pdf_bytes: bytes) -> List[PageContent]:
     """
     Open a PDF from raw bytes and return page-level text.
-
-    Uses PyMuPDF's ``get_text("text")`` which preserves reading order
-    far better than many pure-Python alternatives.
+    Extracts structured Markdown tables using PyMuPDF's table finder
+    alongside continuous body text, preserving column-row alignments.
     """
     pages: List[PageContent] = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:
         for page_idx in range(len(doc)):
             page = doc[page_idx]
+
+            # 1. Extract structured tables if present
+            table_markdowns: list[str] = []
+            try:
+                tabs = page.find_tables()
+                for tab in tabs:
+                    md = tab.to_markdown()
+                    if md and len(md.strip()) > 10:
+                        table_markdowns.append(md.strip())
+            except Exception:
+                pass
+
+            # 2. Extract standard text
             raw_text = page.get_text("text")
             cleaned = _clean_text(raw_text)
+
+            # 3. If structured tables were found, integrate them cleanly
+            if table_markdowns:
+                table_block = "\n\n### Extracted Table Data:\n" + "\n\n".join(table_markdowns)
+                cleaned = f"{cleaned}\n{table_block}"
+
             if cleaned:
                 pages.append(PageContent(page_number=page_idx + 1, text=cleaned))
     finally:
