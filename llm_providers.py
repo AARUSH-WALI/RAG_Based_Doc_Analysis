@@ -285,6 +285,99 @@ def _stream_ollama(
 # ──────────────────────────────────────────────
 # Provider: Extractive Fallback (No Network)
 # ──────────────────────────────────────────────
+_MONTHS_MAP = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _detect_experience_and_tenure(text: str, question: str) -> Optional[str]:
+    """
+    Detect employment date ranges (e.g. 'Oct 2024 - Oct 2025' or '2021 - 2024'),
+    calculate tenure mathematically, and extract the organization/role.
+    """
+    q_lower = question.lower()
+    if not any(
+        kw in q_lower
+        for kw in [
+            "experience", "years", "tenure", "duration", "work", "career",
+            "job history", "how long", "employment", "roles",
+        ]
+    ):
+        return None
+
+    # Normalise delimiters and section headers
+    for b in ["●", "•", "·", "▪", "▫", "○", "►", "✓", "✔"]:
+        text = text.replace(b, "\n")
+    for sec in [
+        "PROFESSIONAL EXPERIENCE", "WORK EXPERIENCE", "EXPERIENCE",
+        "CORE COMPETENCIES", "PROFESSIONAL SUMMARY", "EDUCATION", "SKILLS",
+    ]:
+        text = re.sub(rf"(?={sec}\b)", "\n\n", text, flags=re.I)
+
+    date_pat = re.compile(
+        r"(?:(?P<m1>[A-Za-z]+)\s+)?(?P<y1>19\d\d|20\d\d)\s*[-–—to]+\s*(?:(?P<m2>[A-Za-z]+)\s+)?(?P<y2>19\d\d|20\d\d|present|current)",
+        re.IGNORECASE,
+    )
+
+    matches = list(date_pat.finditer(text))
+    if not matches:
+        return None
+
+    cards = []
+    for m in matches:
+        m1_str = (m.group("m1") or "").lower()[:3]
+        y1 = int(m.group("y1"))
+        m2_str = (m.group("m2") or "").lower()[:3]
+        y2_str = m.group("y2").lower()
+
+        m1 = _MONTHS_MAP.get(m1_str, 1)
+        if y2_str in ("present", "current"):
+            y2, m2 = 2026, 10
+        else:
+            try:
+                y2 = int(y2_str)
+            except ValueError:
+                continue
+            m2 = _MONTHS_MAP.get(m2_str, 12)
+
+        months = (y2 - y1) * 12 + (m2 - m1)
+        if months <= 0:
+            months = 12
+        years = months // 12
+        rem_m = months % 12
+
+        parts = []
+        if years > 0:
+            parts.append(f"{years} year" + ("s" if years > 1 else ""))
+        if rem_m > 0:
+            parts.append(f"{rem_m} month" + ("s" if rem_m > 1 else ""))
+        duration_str = " ".join(parts) if parts else "1 year"
+
+        # Surrounding context before date (role & organization)
+        start_idx = max(0, m.start() - 140)
+        prefix = text[start_idx : m.start()].strip()
+        lines = [l.strip() for l in prefix.split("\n") if l.strip()]
+        last_line = lines[-1] if lines else "Documented Organization / Role"
+        last_line = re.sub(
+            r"^(PROFESSIONAL EXPERIENCE|WORK EXPERIENCE|EXPERIENCE)\s*[:\-]?\s*",
+            "",
+            last_line,
+            flags=re.I,
+        ).strip()
+
+        card = (
+            f"- **Organization / Role**: **{last_line}**\n"
+            f"- **Documented Period**: `{m.group(0).strip()}`\n"
+            f"- **Calculated Tenure**: **{duration_str}** ({months} months total)"
+        )
+        cards.append(card)
+
+    return "\n\n".join(cards) if cards else None
+
+
 def _decompose_into_academic_units(clean_body: str) -> list[str]:
     """
     Deconstructs dense revision sheets, mindmaps, and paragraphs into
@@ -292,11 +385,23 @@ def _decompose_into_academic_units(clean_body: str) -> list[str]:
     """
     from utils import clean_markdown_math
 
-    # Normalize dividers: bullets, pipes, em-dashes
-    text = clean_body.replace("•", "\n").replace("·", "\n").replace("|", "\n").replace("—", " - ")
+    # Normalize dividers: bullets (both standard and Unicode bullets/shapes), pipes, em-dashes
+    for bullet in ["•", "●", "·", "▪", "▫", "○", "►", "✓", "✔"]:
+        clean_body = clean_body.replace(bullet, "\n")
+    text = clean_body.replace("|", "\n").replace("—", " - ")
 
-    # Insert linebreaks before major formula keywords if glued together
-    formula_anchors = [
+    # Insert linebreaks before major resume / academic section headers
+    section_anchors = [
+        r"(?=PROFESSIONAL SUMMARY\b)",
+        r"(?=CORE COMPETENCIES\b)",
+        r"(?=PROFESSIONAL EXPERIENCE\b)",
+        r"(?=WORK EXPERIENCE\b)",
+        r"(?=EDUCATION\b)",
+        r"(?=ACADEMIC QUALIFICATIONS\b)",
+        r"(?=SKILLS\b)",
+        r"(?=PROJECTS\b)",
+        r"(?=CERTIFICATIONS\b)",
+        r"(?=LANGUAGES\b)",
         r"(?=Circumference\b)",
         r"(?=Area of circle\b)",
         r"(?=Area of semicircle\b)",
@@ -324,7 +429,7 @@ def _decompose_into_academic_units(clean_body: str) -> list[str]:
         r"(?=Special Angles\b)",
         r"(?=Fifteen one-line facts\b)",
     ]
-    for anchor in formula_anchors:
+    for anchor in section_anchors:
         text = re.sub(anchor, "\n", text, flags=re.IGNORECASE)
 
     raw_units = []
@@ -445,6 +550,10 @@ def extractive_answer(question: str, context: str) -> str:
 
     # Build structured response
     output_sections = []
+
+    tenure_card = _detect_experience_and_tenure(clean_body, question)
+    if tenure_card:
+        output_sections.append(f"### 💼 Verified Professional Tenure & Experience\n{tenure_card}")
 
     if formulas:
         f_list = "\n".join(f"  - **{f}**" if "=" in f else f"  - {f}" for f in formulas[:10])

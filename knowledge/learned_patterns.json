@@ -40,6 +40,11 @@
       "query": "who is the prime minister of india",
       "document_type": "general",
       "timestamp": "2026-10-14T16:23:00.625113"
+    },
+    {
+      "query": "tell me the years of experience",
+      "document_type": "general",
+      "timestamp": "2026-10-14T17:04:43.060362"
     }
   ],
   "domain_detections": {}
