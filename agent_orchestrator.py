@@ -41,6 +41,8 @@ from typing import List, Optional, Tuple
 
 from retrieval_engine import SearchResult
 from utils import clean_markdown_math
+from knowledge_base import get_knowledge_base
+from table_analyzer import analyze_tables_for_query
 
 
 class QueryIntent(str, Enum):
@@ -183,55 +185,35 @@ class IntentAgent:
 class QueryExpansionAgent:
     """
     Deconstructs user queries into academic keywords, domain concepts,
-    and mathematical tokens to maximize retrieval precision.
-    """
+    and mathematical tokens to maximise retrieval precision.
 
-    _ACADEMIC_SYNONYMS = {
-        "area": ["surface area", "region", "formula", "square units"],
-        "perimeter": ["circumference", "boundary", "length"],
-        "sector": ["arc length", "subtended angle", "theta", "central angle"],
-        "segment": ["chord", "triangle area", "minor segment", "major segment"],
-        "wiper": ["car wiper", "sweep angle", "swept area", "blade"],
-        "clock": ["minute hand", "hour hand", "rotation angle", "sweep"],
-        "sprinkler": ["water spray", "circular region", "spray angle"],
-        "marks": ["marking scheme", "exam question", "typical question form", "weightage"],
-        "expensive": ["highest price", "maximum cost", "costliest", "total price", "price per piece", "rate"],
-        "costly": ["highest price", "most expensive", "maximum cost", "total price"],
-        "cheapest": ["lowest price", "minimum cost", "least expensive", "lowest rate", "price per piece"],
-        "highest": ["maximum", "top", "greatest", "peak", "highest price", "highest value"],
-        "lowest": ["minimum", "bottom", "least", "lowest price", "lowest value"],
-        "price": ["cost", "rate", "total price", "price per piece", "amount"],
-        "cost": ["price", "total price", "rate", "amount"],
-        "quantity": ["units", "count", "pieces", "volume"],
-    }
+    Delegates to the ``KnowledgeBase`` singleton which holds 200+
+    domain-specific synonym entries across 8 verticals (business,
+    academic, medical, legal, scientific, technical, and general).
+    """
 
     @classmethod
     def expand_query(cls, query: str) -> Tuple[str, List[str]]:
         """
-        Expands the user query with relevant academic concepts.
-        Returns:
-            (expanded_search_query, list_of_expanded_terms)
+        Expands the user query with relevant academic / domain concepts.
+
+        Returns
+        -------
+        expanded_search_query : str
+            The original query with up to 6 expansion terms appended.
+        list_of_expanded_terms : list[str]
+            Up to 10 unique expansion terms that were found.
         """
-        tokens = query.lower().split()
-        expanded_terms: List[str] = []
+        kb = get_knowledge_base()
+        expanded_query, unique_terms = kb.expand_query(query)
 
-        for token in tokens:
-            clean_t = re.sub(r"[^\w]", "", token)
-            if clean_t in cls._ACADEMIC_SYNONYMS:
-                expanded_terms.extend(cls._ACADEMIC_SYNONYMS[clean_t])
+        # Also learn from this query for future sessions
+        try:
+            kb.learn_from_query(query)
+        except Exception:
+            pass
 
-        # Filter out duplicates while preserving order
-        unique_terms = []
-        for t in expanded_terms:
-            if t not in unique_terms:
-                unique_terms.append(t)
-
-        if unique_terms:
-            expanded_query = f"{query} {' '.join(unique_terms[:4])}"
-        else:
-            expanded_query = query
-
-        return expanded_query, unique_terms[:6]
+        return expanded_query, unique_terms
 
 
 # ──────────────────────────────────────────────
@@ -327,8 +309,26 @@ class AcademicSynthesisAgent:
     @classmethod
     def build_professor_prompt(cls, question: str, context: str) -> str:
         """
-        Creates an academic prompt enforcing pedagogical structure and KaTeX LaTeX math.
+        Creates an academic prompt enforcing pedagogical structure, KaTeX LaTeX math,
+        **and** tabular / numerical extremum guardrails.
+
+        When the context contains Markdown tables, the Table Pre-Computation
+        Engine is invoked first so the LLM receives a pre-computed answer and
+        only needs to format it — eliminating arithmetic hallucinations.
         """
+        # ── Pre-compute table analysis if applicable ──
+        table_analysis = ""
+        try:
+            result = analyze_tables_for_query(context, question)
+            if result:
+                table_analysis = (
+                    "\n\n--- PRE-COMPUTED TABLE ANALYSIS (use these EXACT numbers) ---\n"
+                    + result
+                    + "\n--- END PRE-COMPUTED ANALYSIS ---\n"
+                )
+        except Exception:
+            pass
+
         return f"""You are a distinguished university professor and senior academic researcher acting as DocuMind AI.
 Synthesize an authoritative, rigorously structured, and comprehensive answer to the user's question based strictly on the verified document context below.
 
@@ -345,13 +345,22 @@ Synthesize an authoritative, rigorously structured, and comprehensive answer to 
    - Use structured bullet points, numbered proofs, or comparative tables when discussing marks, problem types, or conditions.
 4. **Source Citations**:
    - Rigorously cite exact source page numbers at the point of assertion, e.g. *(Source: Document Name, Page X)*.
-5. **Professor's Pedagogical Commentary**:
+5. **Tabular & Numerical Extremum Analysis**:
+   - For questions comparing prices, quantities, costs, or maximum/minimum values (e.g. "which is most expensive", "cheapest", "highest"):
+     * If a PRE-COMPUTED TABLE ANALYSIS is provided below, use those EXACT numbers and rankings. Do NOT override them.
+     * Systematically check EVERY row in the table before declaring a top item.
+     * Differentiate explicitly between "Price per Piece / Unit Price" and "Total Price".
+     * Cite the exact numbers from the table. Never invent or hallucinate digits.
+     * Provide a clear ranked comparison of the top items.
+6. **Professor's Pedagogical Commentary**:
    - Conclude with an educational insight, typical student pitfalls, or examination tips based on the text.
+7. **Zero Mojibake**:
+   - Never output corrupted symbols (e.g. â€", â€¢, Â).
 
 --- VERIFIED DOCUMENT CONTEXT ---
 {context}
 --- END CONTEXT ---
-
+{table_analysis}
 Student/Researcher Question: {question}
 
 Professor's Formal Response:"""
@@ -363,6 +372,10 @@ Professor's Formal Response:"""
         """
         Synthesizes an academic-grade structured report when running completely offline
         without an active LLM backend.
+
+        Now **query-aware**: if the user asks a comparison / extremum / aggregation
+        question and the context contains Markdown tables, the Table Pre-Computation
+        Engine provides a programmatic answer.
         """
         if not verified_results:
             return (
@@ -371,34 +384,72 @@ Professor's Formal Response:"""
                 "Please refine the query or lower the similarity threshold in the sidebar."
             )
 
+        # ── Try table-based programmatic answer first ──
+        full_context = "\n\n".join(clean_markdown_math(r.text) for r in verified_results[:6])
+        table_answer = None
+        try:
+            table_answer = analyze_tables_for_query(full_context, question)
+        except Exception:
+            pass
+
         citations_list = []
         for r in verified_results:
             page_str = f", {r.page_label}" if r.page_label else ""
             citations_list.append(f"**{r.doc_name}**{page_str} (Relevance: {r.confidence_pct})")
 
-        # Extract primary sentences
+        page_summary = (
+            ", ".join(f"Page {p}" for p in trace.verified_pages)
+            if trace.verified_pages
+            else "Relevant Sections"
+        )
+
+        # If a table analysis was computed, use it as the primary answer
+        if table_answer:
+            report = f"""### 🎓 DocuMind AI — Offline Academic Analysis
+
+**Source pages**: {page_summary}
+
+{table_answer}
+
+---
+
+### 🔬 Multi-Agent Grounding & Source Citations
+- **Inspection Confidence**: {trace.confidence_pct} (Verified across {len(verified_results)} passages)
+- **Primary Sources**:
+"""
+            for cit in citations_list:
+                report += f"  - {cit}\n"
+            return report
+
+        # ── Fallback: extract key points from chunks ──
         primary_chunks = [clean_markdown_math(r.text) for r in verified_results[:4]]
-        
-        # Identify key points
-        key_points = []
-        seen_pts = set()
+
+        key_points: list[str] = []
+        seen_pts: set[str] = set()
         for c in primary_chunks:
             lines = [l.strip() for l in c.split("\n") if l.strip()]
             for line in lines:
                 clean_l = re.sub(r"^[•\-\*]\s*", "", line).strip()
                 clean_l = re.sub(r"^\[Source\s+\d+[^\]]*\]\s*", "", clean_l).strip()
-                if len(clean_l) > 25 and not clean_l.startswith("#") and not clean_l.startswith("[Source") and clean_l not in seen_pts:
+                if (
+                    len(clean_l) > 25
+                    and not clean_l.startswith("#")
+                    and not clean_l.startswith("[Source")
+                    and clean_l not in seen_pts
+                ):
                     seen_pts.add(clean_l)
                     key_points.append(clean_l)
 
         bullets_str = "\n".join(f"- {p}" for p in key_points[:6])
-        page_summary = ", ".join(f"Page {p}" for p in trace.verified_pages) if trace.verified_pages else "Relevant Sections"
 
         # Math formula highlighting
         formula_block = ""
         if trace.detected_formulas:
             clean_forms = [f"`{f}`" for f in trace.detected_formulas]
-            formula_block = f"\n\n**📐 Identified Mathematical Elements & Variables:**\n" + ", ".join(clean_forms)
+            formula_block = (
+                f"\n\n**📐 Identified Mathematical Elements & Variables:**\n"
+                + ", ".join(clean_forms)
+            )
 
         report = f"""### 🎓 Executive Summary & Academic Exposition
 

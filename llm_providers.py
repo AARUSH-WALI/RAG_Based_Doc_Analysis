@@ -34,6 +34,7 @@ from config import (
     REQUEST_TIMEOUT,
     SYSTEM_PROMPT_TEMPLATE,
 )
+from table_analyzer import analyze_tables_for_query
 
 
 # ──────────────────────────────────────────────
@@ -206,7 +207,11 @@ def _stream_ollama(
     model: str = "",
     base_url: str = OLLAMA_BASE_URL,
 ) -> Generator[str, None, None]:
-    """Stream from a locally running Ollama server with automatic model discovery."""
+    """Stream from a locally running Ollama server using the /api/chat endpoint.
+    
+    Uses the chat-style API (system + user messages) instead of /api/generate
+    for significantly better instruction following with small models.
+    """
     available = get_available_ollama_models(base_url)
     target_model = model or OLLAMA_MODEL
     
@@ -219,12 +224,34 @@ def _stream_ollama(
         else:
             target_model = available[0]
 
+    # Build the system prompt with pre-computed table analysis injected
+    system_content = SYSTEM_PROMPT_TEMPLATE.format(context=context)
+
+    # Pre-compute table analysis and inject into context
+    try:
+        table_result = analyze_tables_for_query(context, question)
+        if table_result:
+            system_content += (
+                "\n\n--- PRE-COMPUTED TABLE ANALYSIS (use these EXACT numbers) ---\n"
+                + table_result
+                + "\n--- END PRE-COMPUTED ANALYSIS ---"
+            )
+    except Exception:
+        pass
+
     with requests.post(
-        f"{base_url.rstrip('/')}/api/generate",
+        f"{base_url.rstrip('/')}/api/chat",
         json={
             "model":  target_model,
-            "prompt": _build_prompt_string(question, context),
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user",   "content": question},
+            ],
             "stream": True,
+            "options": {
+                "temperature": 0.1,
+                "num_predict": 1024,
+            },
         },
         stream=True,
         timeout=REQUEST_TIMEOUT,
@@ -237,7 +264,9 @@ def _stream_ollama(
                 obj = json.loads(raw_line)
             except json.JSONDecodeError:
                 continue
-            piece = obj.get("response", "")
+            # /api/chat returns {"message": {"content": "..."}}
+            msg = obj.get("message", {})
+            piece = msg.get("content", "")
             if piece:
                 yield piece
             if obj.get("done"):
@@ -321,14 +350,31 @@ def _decompose_into_academic_units(clean_body: str) -> list[str]:
 
 def extractive_answer(question: str, context: str) -> str:
     """
-    Academic-grade extractive synthesizer. Deconstructs dense PDF formula sheets,
-    mindmaps, and text chunks into cleanly categorized, LaTeX-formatted academic sections:
-    - 📐 Key Mathematical Formulas & Proofs
-    - 🧠 Conceptual Principles & Definitions
-    - ⏱️ Examination Strategy & Marking Plan
-    - ⚠️ Common Errors & Pitfalls
+    **Query-aware** extractive synthesizer for zero-network offline operation.
+
+    Pipeline:
+    1. Check if context contains Markdown tables → delegate to Table
+       Pre-Computation Engine for programmatic numeric analysis.
+    2. If question is a comparison/extremum query → produce ranked table.
+    3. Otherwise, filter extracted units by relevance to the question
+       and present categorised results.
     """
-    # 1. Clean context: strip [Source ...] metadata lines
+    # ── Step 1: Try table-based programmatic answer ──
+    try:
+        table_answer = analyze_tables_for_query(context, question)
+        if table_answer:
+            return (
+                f"### 🎓 DocuMind AI — Offline Intelligent Analysis\n\n"
+                f"{table_answer}\n\n"
+                f"---\n"
+                f"💡 **Note**: This answer was computed **programmatically** by scanning every row "
+                f"in the document table. No LLM was used — results are mathematically exact.\n\n"
+                f"For a natural-language explanation, switch **AI Provider** to **`Ollama (Local LLM)`**."
+            )
+    except Exception:
+        pass
+
+    # ── Step 2: Clean context and decompose ──
     clean_lines = []
     for line in context.split("\n"):
         line_s = line.strip()
@@ -337,7 +383,6 @@ def extractive_answer(question: str, context: str) -> str:
         clean_lines.append(line_s)
     clean_body = " ".join(clean_lines)
 
-    # 2. Decompose into distinct mathematical & conceptual units
     units = _decompose_into_academic_units(clean_body)
 
     if not units:
@@ -347,17 +392,42 @@ def extractive_answer(question: str, context: str) -> str:
             "Please review the verified source citations below for full details."
         )
 
-    # 3. Categorize into academic sections
+    # ── Step 3: Query-aware relevance filtering ──
+    q_words = set(re.sub(r"[^\w\s]", "", question.lower()).split())
+    q_words -= {"a", "an", "the", "is", "are", "was", "were", "what", "which",
+                "how", "who", "where", "when", "why", "do", "does", "did",
+                "in", "of", "to", "for", "and", "or", "it", "my", "your",
+                "this", "that", "be", "me", "can", "you", "all"}
+
+    scored_units: list[tuple[float, str]] = []
+    for u in units:
+        u_lower = u.lower()
+        overlap = sum(1 for w in q_words if w in u_lower and len(w) > 2)
+        scored_units.append((overlap, u))
+
+    # Sort by relevance, then by original order
+    scored_units.sort(key=lambda x: x[0], reverse=True)
+
+    # If there's a clear relevance signal, use top-scoring units
+    # Otherwise, fall back to all units (original behavior)
+    if scored_units and scored_units[0][0] > 0:
+        relevant_units = [u for score, u in scored_units if score > 0][:12]
+        remaining_units = [u for score, u in scored_units if score == 0][:4]
+        all_display = relevant_units + remaining_units
+    else:
+        all_display = [u for _, u in scored_units][:12]
+
+    # ── Step 4: Categorize into academic sections ──
     formulas: list[str] = []
     exam_strategy: list[str] = []
     pitfalls: list[str] = []
     concepts: list[str] = []
 
-    for u in units:
+    for u in all_display:
         u_lower = u.lower()
         if any(term in u_lower for term in ["error", "wrong", "mistake", "tip:", "quick tip", "checklist"]):
             pitfalls.append(u)
-        elif any(term in u_lower for term in ["mcq", "mark", "marks", "time per", "min", "very short", "long answer"]):
+        elif any(term in u_lower for term in ["mcq", "very short", "long answer"]):
             exam_strategy.append(u)
         elif any(sym in u for sym in ["=", r"\pi", r"\theta", "r^2", "R^2", r"\frac", r"\sqrt", "area", "perimeter", "circumference", "arc", "formula", "scaling"]):
             formulas.append(u)
@@ -372,8 +442,8 @@ def extractive_answer(question: str, context: str) -> str:
         output_sections.append(f"### 📐 Verified Mathematical Formulas & Sheet\n{f_list}")
 
     if concepts:
-        c_list = "\n".join(f"  - {c}" for c in concepts[:6])
-        output_sections.append(f"### 🧠 Conceptual Principles & Mindmap\n{c_list}")
+        c_list = "\n".join(f"  - {c}" for c in concepts[:8])
+        output_sections.append(f"### 🧠 Key Findings & Information\n{c_list}")
 
     if exam_strategy:
         e_list = "\n".join(f"  - {e}" for e in exam_strategy[:5])
@@ -384,14 +454,14 @@ def extractive_answer(question: str, context: str) -> str:
         output_sections.append(f"### 💡 Professor's Critical Caveats & Common Errors\n{p_list}")
 
     if not output_sections:
-        fallback_list = "\n".join(f"- {u}" for u in units[:8])
+        fallback_list = "\n".join(f"- {u}" for u in all_display[:8])
         output_sections.append(f"### 🎓 Executive Document Findings\n{fallback_list}")
 
     joined_report = "\n\n---\n\n".join(output_sections)
 
     return (
-        f"### 🎓 Academic Synthesis & Structured Formula Sheet\n\n"
-        f"The following verified data has been extracted, mathematically normalized into KaTeX symbols, and categorized:\n\n"
+        f"### 🎓 Academic Synthesis — Query: *{question[:80]}{'...' if len(question) > 80 else ''}*\n\n"
+        f"The following verified data has been extracted and filtered for relevance to your question:\n\n"
         f"{joined_report}\n\n"
         f"---\n"
         f"💡 **Note on Local Modes**: This response was generated by the zero-network **Extractive Synthesizer**. "

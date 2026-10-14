@@ -20,7 +20,7 @@ EMBEDDING_MODEL_NAME: str = os.environ.get(
 # ──────────────────────────────────────────────
 # Chunking Parameters
 # ──────────────────────────────────────────────
-CHUNK_MAX_WORDS: int = int(os.environ.get("CHUNK_MAX_WORDS", 400))
+CHUNK_MAX_WORDS: int = int(os.environ.get("CHUNK_MAX_WORDS", 800))
 CHUNK_OVERLAP_SENTENCES: int = int(os.environ.get("CHUNK_OVERLAP_SENTENCES", 2))
 
 # ──────────────────────────────────────────────
@@ -98,6 +98,7 @@ Synthesize an authoritative, rigorously structured, and comprehensive response t
    - Rigorously cite source page numbers at the point of assertion, e.g. *(Source: Document Name, Page X)*.
 5. Tabular & Numerical Extremum Analysis:
    - For questions comparing prices, quantities, costs, or maximum/minimum values (e.g. "which is most expensive", "cheapest", "highest"):
+     * If a PRE-COMPUTED TABLE ANALYSIS section is provided below, use those EXACT numbers and rankings. Do NOT override them.
      * Systematically check EVERY row in the table before declaring a top item.
      * Differentiate explicitly between "Price per Piece / Unit Price" and "Total Price".
      * Cite the exact numbers from the table. Never invent or hallucinate digits.
