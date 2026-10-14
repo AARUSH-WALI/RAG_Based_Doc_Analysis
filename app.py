@@ -559,13 +559,25 @@ with st.sidebar:
     st.metric("Queries", st.session_state.query_count)
 
     if store.doc_metadata:
-        with st.expander("📄 Document Details"):
-            for name, meta in store.doc_metadata.items():
-                st.markdown(
-                    f"**{name}**  \n"
-                    f"{meta['num_chunks']} chunks · {meta['total_pages']} pages · "
-                    f"{meta['total_words']:,} words"
-                )
+        with st.expander("📄 Document Details", expanded=True):
+            for name, meta in list(store.doc_metadata.items()):
+                col_name, col_del = st.columns([4, 1])
+                with col_name:
+                    st.markdown(
+                        f"**{name}**  \n"
+                        f"{meta['num_chunks']} chunks · {meta['total_pages']} pages"
+                    )
+                with col_del:
+                    if st.button("❌", key=f"del_doc_{name}", help=f"Remove '{name}' from index"):
+                        store.remove_document(name)
+                        if store.chunks:
+                            build_indexes(store, get_embedding_model())
+                        st.rerun()
+
+            if st.button("🗑️ Clear All Documents", key="btn_clear_all_side", use_container_width=True):
+                store.clear()
+                st.session_state.chat_history.clear()
+                st.rerun()
 
 # ═══════════════════════════════════════════════
 # STAT CARDS
@@ -593,7 +605,15 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ═══════════════════════════════════════════════
 # PDF UPLOAD
 # ═══════════════════════════════════════════════
-st.markdown('<div class="section-title">📤 Upload Documents</div>', unsafe_allow_html=True)
+col_u_title, col_u_clear = st.columns([3, 1])
+with col_u_title:
+    st.markdown('<div class="section-title">📤 Upload Documents</div>', unsafe_allow_html=True)
+with col_u_clear:
+    if store.chunks:
+        if st.button("🗑️ Clear All Docs", key="btn_clear_all_main", help="Unload all loaded documents and chat history", use_container_width=True):
+            store.clear()
+            st.session_state.chat_history.clear()
+            st.rerun()
 
 uploaded_files = st.file_uploader(
     "Choose PDF files",

@@ -26,6 +26,8 @@ def parse_markdown_tables(text: str) -> List[List[Dict[str, str]]]:
 
     Returns a list of tables, where each table is a list of row dicts
     mapping column-header → cell-value.
+    Handles multi-page table splits where page 2 continuation has data
+    instead of duplicate headers.
     """
     tables: list[list[dict[str, str]]] = []
     lines = text.split("\n")
@@ -44,8 +46,29 @@ def parse_markdown_tables(text: str) -> List[List[Dict[str, str]]]:
                     i += 1
                     continue
 
+                # Check if this is a continuation table where 'headers' is actually a data row:
+                # (e.g. page 2 table split where 2+ cells in the detected header are numbers)
+                is_continuation = False
+                prev_headers: list[str] = []
+                if tables and len(tables[-1]) > 0:
+                    prev_headers = list(tables[-1][0].keys())
+                    if len(prev_headers) == len(headers):
+                        num_cells = sum(1 for h in headers if _extract_number(h) is not None)
+                        if num_cells >= 2 or (len(headers) >= 3 and num_cells >= 1):
+                            is_continuation = True
+
                 # Parse data rows
                 rows: list[dict[str, str]] = []
+                if is_continuation:
+                    first_row: dict[str, str] = {}
+                    for k in range(min(len(prev_headers), len(headers))):
+                        first_row[prev_headers[k]] = headers[k]
+                    if first_row:
+                        tables[-1].append(first_row)
+                    effective_headers = prev_headers
+                else:
+                    effective_headers = headers
+
                 j = i + 2
                 while j < len(lines) and "|" in lines[j]:
                     row_line = lines[j].strip()
@@ -58,7 +81,6 @@ def parse_markdown_tables(text: str) -> List[List[Dict[str, str]]]:
                         j += 1
                         continue
                     cells = [c.strip() for c in row_line.split("|")]
-                    cells = [c for c in cells if c or cells.index(c) > 0]  # handle leading empty
                     # Remove empty strings from leading/trailing pipes
                     while cells and cells[0] == "":
                         cells.pop(0)
@@ -67,13 +89,16 @@ def parse_markdown_tables(text: str) -> List[List[Dict[str, str]]]:
 
                     if cells:
                         row: dict[str, str] = {}
-                        for k in range(min(len(headers), len(cells))):
-                            row[headers[k]] = cells[k]
+                        for k in range(min(len(effective_headers), len(cells))):
+                            row[effective_headers[k]] = cells[k]
                         if row:
-                            rows.append(row)
+                            if is_continuation:
+                                tables[-1].append(row)
+                            else:
+                                rows.append(row)
                     j += 1
 
-                if rows:
+                if rows and not is_continuation:
                     tables.append(rows)
                 i = j
                 continue
@@ -158,13 +183,18 @@ _SUM_KEYWORDS = [
 _COUNT_KEYWORDS = [
     "how many", "count", "number of", "total items", "total products",
 ]
+_TABLE_KEYWORDS = [
+    "table", "tabular", "rows", "columns", "price list", "catalog",
+    "spreadsheet", "show table", "list table", "table structure",
+    "detected table", "what tables",
+]
 
 
 def _classify_query(query: str) -> Tuple[str, str, Optional[str]]:
     """
     Classify a query into (query_type, direction, metric_hint).
 
-    query_type: 'extremum' | 'aggregation' | 'count' | 'general'
+    query_type: 'extremum' | 'aggregation' | 'count' | 'table_summary' | 'general'
     direction:  'max' | 'min' | 'sum' | 'count' | ''
     metric_hint: 'unit_price' | 'total_price' | 'quantity' | None
     """
@@ -203,6 +233,11 @@ def _classify_query(query: str) -> Tuple[str, str, Optional[str]]:
         if kw in q:
             return "count", "count", None
 
+    # Explicit table request
+    for kw in _TABLE_KEYWORDS:
+        if kw in q:
+            return "table_summary", "", None
+
     return "general", "", None
 
 
@@ -233,13 +268,19 @@ def _best_column_for_hint(
 # ──────────────────────────────────────────────
 # Main Entry Point
 # ──────────────────────────────────────────────
-def analyze_tables_for_query(context: str, query: str) -> Optional[str]:
+def analyze_tables_for_query(
+    context: str, query: str, for_llm_prompt: bool = False
+) -> Optional[str]:
     """
     Given RAG context (which may contain Markdown tables) and a user query,
     perform **programmatic** numeric analysis and return a pre-computed
-    answer string that can be injected into the LLM prompt.
+    answer string.
 
     Returns ``None`` when no table-based analysis is applicable.
+    If ``for_llm_prompt`` is True, a structural table summary is provided
+    even for general queries as background orientation for the LLM.
+    Otherwise (e.g. for offline extractive mode), general non-table queries
+    return ``None`` so standard text synthesis is performed.
     """
     tables = parse_markdown_tables(context)
     if not tables:
@@ -253,9 +294,15 @@ def analyze_tables_for_query(context: str, query: str) -> Optional[str]:
         return _analyze_aggregation(tables)
     if query_type == "count":
         return _analyze_count(tables)
+    if query_type == "table_summary":
+        return _generate_table_summary(tables)
 
-    # General: provide a concise structural summary so the LLM has orientation
-    return _generate_table_summary(tables)
+    # General non-table query: only provide table structural summary if explicitly
+    # requested for LLM prompt orientation; never for offline standalone answers
+    if for_llm_prompt:
+        return _generate_table_summary(tables)
+
+    return None
 
 
 # ──────────────────────────────────────────────

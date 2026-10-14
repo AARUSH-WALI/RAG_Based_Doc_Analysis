@@ -65,6 +65,23 @@ class DocumentStore:
             "ingested_at":  meta.ingested_at,
         }
 
+    def remove_document(self, name: str) -> bool:
+        """Remove a document and its chunks. Returns True if found."""
+        if name not in self.doc_metadata and not any(c.doc_name == name for c in self.chunks):
+            return False
+        self.chunks = [c for c in self.chunks if c.doc_name != name]
+        for i, c in enumerate(self.chunks):
+            c.chunk_id = i
+        self.doc_metadata.pop(name, None)
+        return True
+
+    def clear(self) -> None:
+        """Clear all loaded documents, chunks, and indexes."""
+        self.chunks.clear()
+        self.doc_metadata.clear()
+        self.faiss_index = None
+        self.bm25_index = None
+
 
 # ──────────────────────────────────────────────
 # Embedding Model (cached at module level)

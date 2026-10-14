@@ -170,20 +170,35 @@ DOMAIN_SYNONYMS: Dict[str, List[str]] = {
     "main":           ["primary", "principal", "chief", "central", "core"],
     "describe":       ["explain", "elaborate", "detail", "outline", "discuss"],
     "explain":        ["describe", "clarify", "elucidate", "illustrate", "define"],
+
+    # ═══ RESUME, CAREER & HR / EMPLOYMENT ══════
+    "experience":     ["work history", "employment", "tenure", "years of experience", "job history", "professional experience"],
+    "resume":         ["curriculum vitae", "CV", "profile", "bio", "candidate", "qualifications", "credentials"],
+    "education":      ["degree", "qualification", "university", "college", "school", "academic background", "bachelor", "master"],
+    "skills":         ["competencies", "expertise", "proficiencies", "abilities", "technical skills", "capabilities"],
+    "qualification":  ["degree", "diploma", "certification", "credential", "education"],
+    "candidate":      ["applicant", "individual", "person", "profile", "resume owner"],
+    "role":           ["designation", "position", "title", "job title", "responsibilities"],
+    "employment":     ["work", "job", "tenure", "career", "occupation"],
+    "tenure":         ["duration", "period", "years", "months", "timeline"],
 }
 
 # Multi-word phrase expansions
 PHRASE_SYNONYMS: Dict[str, List[str]] = {
-    "most expensive":  ["highest price", "maximum cost", "costliest", "premium"],
-    "least expensive": ["cheapest", "lowest price", "minimum cost"],
-    "how many":        ["count", "total number", "quantity"],
-    "how much":        ["total cost", "total price", "amount", "sum"],
-    "price per":       ["unit price", "rate", "per piece cost"],
-    "total price":     ["batch cost", "aggregate price", "total cost"],
-    "per piece":       ["unit price", "per unit", "individual price"],
-    "on average":      ["mean", "typical", "average value"],
-    "in total":        ["sum total", "aggregate", "combined", "overall"],
-    "sort by":         ["rank by", "order by", "arrange by"],
+    "most expensive":       ["highest price", "maximum cost", "costliest", "premium"],
+    "least expensive":      ["cheapest", "lowest price", "minimum cost"],
+    "how many":             ["count", "total number", "quantity"],
+    "how much":             ["total cost", "total price", "amount", "sum"],
+    "price per":            ["unit price", "rate", "per piece cost"],
+    "total price":          ["batch cost", "aggregate price", "total cost"],
+    "per piece":            ["unit price", "per unit", "individual price"],
+    "on average":           ["mean", "typical", "average value"],
+    "in total":             ["sum total", "aggregate", "combined", "overall"],
+    "sort by":              ["rank by", "order by", "arrange by"],
+    "years of experience":  ["tenure", "employment duration", "career history", "work experience", "period"],
+    "gist of":              ["summary", "overview", "synopsis", "key points", "brief"],
+    "work experience":      ["employment history", "professional background", "career", "roles"],
+    "resume owner":         ["candidate", "applicant", "name", "profile subject"],
 }
 
 

@@ -41,9 +41,15 @@ from table_analyzer import analyze_tables_for_query
 # Prompt Construction
 # ──────────────────────────────────────────────
 def _build_messages(question: str, context: str) -> list[dict]:
-    """Format the system + user messages for chat-style APIs."""
+    """Format the system + user messages for chat-style APIs.
+
+    Uses ``.replace()`` instead of ``.format()`` because the template
+    contains LaTeX curly braces like ``{Area}``, ``{\\theta}`` that would
+    cause ``KeyError`` with Python's ``str.format()``.
+    """
+    system = SYSTEM_PROMPT_TEMPLATE.replace("{context}", context)
     return [
-        {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(context=context)},
+        {"role": "system", "content": system},
         {"role": "user",   "content": question},
     ]
 
@@ -224,12 +230,15 @@ def _stream_ollama(
         else:
             target_model = available[0]
 
-    # Build the system prompt with pre-computed table analysis injected
-    system_content = SYSTEM_PROMPT_TEMPLATE.format(context=context)
+    # Build the system prompt with pre-computed table analysis injected.
+    # NOTE: We use .replace() instead of .format() because the template
+    # contains LaTeX curly braces like {Area}, {\theta} that would cause
+    # KeyError with Python's str.format().
+    system_content = SYSTEM_PROMPT_TEMPLATE.replace("{context}", context)
 
     # Pre-compute table analysis and inject into context
     try:
-        table_result = analyze_tables_for_query(context, question)
+        table_result = analyze_tables_for_query(context, question, for_llm_prompt=True)
         if table_result:
             system_content += (
                 "\n\n--- PRE-COMPUTED TABLE ANALYSIS (use these EXACT numbers) ---\n"
@@ -361,7 +370,7 @@ def extractive_answer(question: str, context: str) -> str:
     """
     # ── Step 1: Try table-based programmatic answer ──
     try:
-        table_answer = analyze_tables_for_query(context, question)
+        table_answer = analyze_tables_for_query(context, question, for_llm_prompt=False)
         if table_answer:
             return (
                 f"### 🎓 DocuMind AI — Offline Intelligent Analysis\n\n"

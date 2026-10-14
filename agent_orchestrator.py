@@ -319,7 +319,7 @@ class AcademicSynthesisAgent:
         # ── Pre-compute table analysis if applicable ──
         table_analysis = ""
         try:
-            result = analyze_tables_for_query(context, question)
+            result = analyze_tables_for_query(context, question, for_llm_prompt=True)
             if result:
                 table_analysis = (
                     "\n\n--- PRE-COMPUTED TABLE ANALYSIS (use these EXACT numbers) ---\n"
@@ -388,7 +388,7 @@ Professor's Formal Response:"""
         full_context = "\n\n".join(clean_markdown_math(r.text) for r in verified_results[:6])
         table_answer = None
         try:
-            table_answer = analyze_tables_for_query(full_context, question)
+            table_answer = analyze_tables_for_query(full_context, question, for_llm_prompt=False)
         except Exception:
             pass
 
@@ -421,10 +421,13 @@ Professor's Formal Response:"""
                 report += f"  - {cit}\n"
             return report
 
-        # ── Fallback: extract key points from chunks ──
+        # ── Fallback: extract key points from chunks, scored by relevance ──
         primary_chunks = [clean_markdown_math(r.text) for r in verified_results[:4]]
 
-        key_points: list[str] = []
+        q_terms = set(re.sub(r"[^\w\s]", "", question.lower()).split())
+        q_terms = {t for t in q_terms if len(t) > 2 and t not in {"the", "and", "for", "with", "tell", "what"}}
+
+        scored_points: list[tuple[int, str]] = []
         seen_pts: set[str] = set()
         for c in primary_chunks:
             lines = [l.strip() for l in c.split("\n") if l.strip()]
@@ -432,15 +435,25 @@ Professor's Formal Response:"""
                 clean_l = re.sub(r"^[•\-\*]\s*", "", line).strip()
                 clean_l = re.sub(r"^\[Source\s+\d+[^\]]*\]\s*", "", clean_l).strip()
                 if (
-                    len(clean_l) > 25
+                    len(clean_l) > 10
                     and not clean_l.startswith("#")
                     and not clean_l.startswith("[Source")
                     and clean_l not in seen_pts
                 ):
                     seen_pts.add(clean_l)
-                    key_points.append(clean_l)
+                    # Score by overlap with question keywords
+                    l_lower = clean_l.lower()
+                    overlap = sum(2 for t in q_terms if t in l_lower)
+                    # Boost lines with dates, numbers, or key resume/academic terms
+                    if any(t in l_lower for t in ["202", "201", "year", "month", "experience", "role", "tenure"]):
+                        overlap += 1
+                    scored_points.append((overlap, clean_l))
 
-        bullets_str = "\n".join(f"- {p}" for p in key_points[:6])
+        # Sort by relevance score descending
+        scored_points.sort(key=lambda x: x[0], reverse=True)
+        key_points = [p for _, p in scored_points]
+
+        bullets_str = "\n".join(f"- {p}" for p in key_points[:8])
 
         # Math formula highlighting
         formula_block = ""

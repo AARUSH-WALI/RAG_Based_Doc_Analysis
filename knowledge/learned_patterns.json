@@ -1,0 +1,46 @@
+{
+  "custom_synonyms": {},
+  "successful_queries": [
+    {
+      "query": "telll me the cheapest product",
+      "document_type": "general",
+      "timestamp": "2026-10-14T16:13:31.701320"
+    },
+    {
+      "query": "which product cost more than 1000",
+      "document_type": "general",
+      "timestamp": "2026-10-14T16:14:48.816626"
+    },
+    {
+      "query": "give me sone idea about the resume",
+      "document_type": "general",
+      "timestamp": "2026-10-14T16:16:14.568781"
+    },
+    {
+      "query": "give me the gist of the resume",
+      "document_type": "general",
+      "timestamp": "2026-10-14T16:17:08.078275"
+    },
+    {
+      "query": "is the resume owner is girl or boy",
+      "document_type": "general",
+      "timestamp": "2026-10-14T16:17:46.785949"
+    },
+    {
+      "query": "tell me the years of experience",
+      "document_type": "general",
+      "timestamp": "2026-10-14T16:18:17.867427"
+    },
+    {
+      "query": "pm of india",
+      "document_type": "general",
+      "timestamp": "2026-10-14T16:22:35.265416"
+    },
+    {
+      "query": "who is the prime minister of india",
+      "document_type": "general",
+      "timestamp": "2026-10-14T16:23:00.625113"
+    }
+  ],
+  "domain_detections": {}
+}
